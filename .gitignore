@@ -1,0 +1,7 @@
+bin/
+obj/
+*.user
+.vs/
+
+# Never commit an actual vault file if one ends up in the repo folder
+vault.json
