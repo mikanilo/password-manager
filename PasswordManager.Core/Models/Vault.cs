@@ -1,4 +1,4 @@
-namespace PasswordManager.Models;
+namespace PasswordManager.Core.Models;
 
 /// <summary>
 /// The full contents of vault.json on disk.

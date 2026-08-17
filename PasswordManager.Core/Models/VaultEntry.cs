@@ -1,4 +1,4 @@
-namespace PasswordManager.Models;
+namespace PasswordManager.Core.Models;
 
 /// <summary>
 /// A single stored credential. The password itself is never stored in

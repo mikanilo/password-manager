@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace PasswordManager;
+namespace PasswordManager.Core;
 
 public enum PasswordStrength
 {

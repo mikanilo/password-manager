@@ -1,4 +1,4 @@
-using PasswordManager;
+using PasswordManager.Core;
 
 var vaultPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

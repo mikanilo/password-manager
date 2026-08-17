@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using PasswordManager.Models;
+using PasswordManager.Core.Models;
 
-namespace PasswordManager;
+namespace PasswordManager.Core;
 
 /// <summary>
 /// Handles reading/writing vault.json and the higher-level operations
