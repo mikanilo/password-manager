@@ -18,6 +18,12 @@ duplicating it in each frontend) means both interfaces are guaranteed to
 behave identically and stay in sync — a bug fix or security improvement in
 `Core` automatically applies to both the CLI and the GUI.
 
+## Screenshots
+
+| Login / unlock | Vault view |
+|---|---|
+| ![Login screen](screenshots/login-screen.png) | ![Vault screen](screenshots/vault-screen.png) |
+
 ## Features
 - Create a vault protected by a single master password
 - Add, view, list, and delete saved credentials
