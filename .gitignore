@@ -2,6 +2,8 @@ bin/
 obj/
 *.user
 .vs/
+PasswordManager.NativeHost/publish/
+native-messaging-host-manifest.json
 
 # Never commit an actual vault file if one ends up in the repo folder
 vault.json
