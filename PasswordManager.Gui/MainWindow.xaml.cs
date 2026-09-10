@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using PasswordManager.Core;
+using PasswordManager.Core.Models;
 
 namespace PasswordManager.Gui;
 
@@ -11,6 +12,11 @@ public partial class MainWindow : Window
     private readonly VaultStorage _storage;
     private byte[]? _currentKey;
     private bool _isCreatingVault;
+
+    // A vault written before PIN support still expects its master password.
+    // The auth panel follows the file rather than assuming, so an existing
+    // user isn't locked out by the change.
+    private bool _isLegacyMasterPasswordVault;
 
     public MainWindow()
     {
@@ -30,16 +36,21 @@ public partial class MainWindow : Window
     {
         _isCreatingVault = !_storage.VaultExists();
 
+        _isLegacyMasterPasswordVault =
+            !_isCreatingVault && _storage.GetAuthMode() != VaultAuthMode.Pin;
+
         if (_isCreatingVault)
         {
-            AuthModeLabel.Text = "Create a master password for your new vault";
+            AuthModeLabel.Text = "Choose a PIN for your new vault (at least 4 digits)";
             AuthActionButton.Content = "Create Vault";
             ConfirmPasswordBox.Visibility = Visibility.Visible;
             ConfirmLabel.Visibility = Visibility.Visible;
         }
         else
         {
-            AuthModeLabel.Text = "Enter your master password";
+            AuthModeLabel.Text = _isLegacyMasterPasswordVault
+                ? "Enter your master password"
+                : "Enter your PIN";
             AuthActionButton.Content = "Unlock";
             ConfirmPasswordBox.Visibility = Visibility.Collapsed;
             ConfirmLabel.Visibility = Visibility.Collapsed;
@@ -66,21 +77,22 @@ public partial class MainWindow : Window
 
         if (_isCreatingVault)
         {
-            if (password.Length < 8)
+            var validationError = PinPolicy.Validate(password);
+            if (validationError is not null)
             {
-                AuthStatusText.Text = "Master password should be at least 8 characters.";
+                AuthStatusText.Text = validationError;
                 return;
             }
 
             if (password != ConfirmPasswordBox.Password)
             {
-                AuthStatusText.Text = "Passwords didn't match.";
+                AuthStatusText.Text = "PINs didn't match.";
                 return;
             }
 
             try
             {
-                _storage.Initialize(password);
+                _storage.InitializeWithPin(password);
                 _currentKey = _storage.Unlock(password);
                 ShowVaultPanel();
             }
@@ -96,9 +108,15 @@ public partial class MainWindow : Window
                 _currentKey = _storage.Unlock(password);
                 ShowVaultPanel();
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException ex)
             {
-                AuthStatusText.Text = "Incorrect master password.";
+                AuthStatusText.Text = ex.Message;
+            }
+            catch (DeviceBindingException ex)
+            {
+                // Retyping the PIN will never help here, so say what actually
+                // went wrong instead of a generic "incorrect" message.
+                AuthStatusText.Text = ex.Message;
             }
             catch (Exception ex)
             {
@@ -115,14 +133,29 @@ public partial class MainWindow : Window
         AuthPanel.Visibility = Visibility.Collapsed;
         VaultPanel.Visibility = Visibility.Visible;
 
+        // A vault that still uses a master password has no PIN to change yet,
+        // so the button offers to set one instead.
+        ChangePinButton.Content = _isLegacyMasterPasswordVault ? "Set a PIN" : "Change PIN";
+
         RefreshServiceList();
     }
 
     private void RefreshServiceList()
     {
+        ServiceListBox.DisplayMemberPath = nameof(ServiceListItem.Display);
         ServiceListBox.ItemsSource = null;
-        ServiceListBox.ItemsSource = _storage.ListServices();
+        ServiceListBox.ItemsSource = _storage.ListEntries()
+            .Select(e => new ServiceListItem(
+                e.Service,
+                $"{e.Service}    ·  added {TimestampFormat.Format(e.CreatedUtc)}"))
+            .ToList();
     }
+
+    /// <summary>
+    /// One row in the vault list: the raw service name (used by the action
+    /// buttons) plus a human-readable label showing when it was added.
+    /// </summary>
+    private sealed record ServiceListItem(string Service, string Display);
 
     private void LockButton_Click(object sender, RoutedEventArgs e)
     {
@@ -135,9 +168,137 @@ public partial class MainWindow : Window
 
         VaultPanel.Visibility = Visibility.Collapsed;
         AddOverlay.Visibility = Visibility.Collapsed;
+        ChangePinOverlay.Visibility = Visibility.Collapsed;
         AuthPanel.Visibility = Visibility.Visible;
 
         SetupAuthPanel();
+    }
+
+
+    // ===================== Change PIN =====================
+
+    private void ChangePinButton_Click(object sender, RoutedEventArgs e)
+    {
+        CurrentSecretBox.Password = string.Empty;
+        NewPinBox.Password = string.Empty;
+        ConfirmPinBox.Password = string.Empty;
+        ChangePinStatusText.Text = string.Empty;
+
+        if (_isLegacyMasterPasswordVault)
+        {
+            ChangePinTitle.Text = "Set a PIN";
+            ChangePinIntro.Text =
+                "This vault still opens with a master password. Setting a PIN re-encrypts " +
+                "every entry, and the master password will no longer open it. The PIN is " +
+                "tied to this Windows account on this PC.";
+            CurrentSecretLabel.Text = "Current master password";
+            ConfirmChangePinButton.Content = "Set PIN";
+        }
+        else
+        {
+            ChangePinTitle.Text = "Change PIN";
+            ChangePinIntro.Text =
+                "Every entry is re-encrypted under the new PIN. Saved dates are kept.";
+            CurrentSecretLabel.Text = "Current PIN";
+            ConfirmChangePinButton.Content = "Change PIN";
+        }
+
+        ChangePinOverlay.Visibility = Visibility.Visible;
+        CurrentSecretBox.Focus();
+    }
+
+    private void ConfirmPinBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            SaveChangePinButton_Click(sender, e);
+        }
+    }
+
+    private void CancelChangePinButton_Click(object sender, RoutedEventArgs e)
+    {
+        ClearChangePinFields();
+        ChangePinOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void SaveChangePinButton_Click(object sender, RoutedEventArgs e)
+    {
+        ChangePinStatusText.Text = string.Empty;
+
+        var currentSecret = CurrentSecretBox.Password;
+        var newPin = NewPinBox.Password;
+        var wasLegacy = _isLegacyMasterPasswordVault;
+
+        if (newPin != ConfirmPinBox.Password)
+        {
+            ChangePinStatusText.Text = "PINs didn't match.";
+            return;
+        }
+
+        var validationError = PinPolicy.Validate(newPin);
+        if (validationError is not null)
+        {
+            ChangePinStatusText.Text = validationError;
+            return;
+        }
+
+        try
+        {
+            if (wasLegacy)
+            {
+                _storage.MigrateToPin(currentSecret, newPin);
+            }
+            else
+            {
+                _storage.ChangePin(currentSecret, newPin);
+            }
+
+            // Re-keying re-encrypted every entry, so the key this window is
+            // holding is now stale -- View and Copy would fail with it. Swap
+            // in a key derived from the new PIN before touching the vault again.
+            if (_currentKey != null)
+            {
+                Array.Clear(_currentKey, 0, _currentKey.Length);
+                _currentKey = null;
+            }
+
+            _currentKey = _storage.Unlock(newPin);
+            _isLegacyMasterPasswordVault = false;
+            ChangePinButton.Content = "Change PIN";
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            ChangePinStatusText.Text = ex.Message;
+            return;
+        }
+        catch (DeviceBindingException ex)
+        {
+            ChangePinStatusText.Text = ex.Message;
+            return;
+        }
+        catch (Exception ex)
+        {
+            ChangePinStatusText.Text = $"Error: {ex.Message}";
+            return;
+        }
+
+        ClearChangePinFields();
+        ChangePinOverlay.Visibility = Visibility.Collapsed;
+        RefreshServiceList();
+
+        MessageBox.Show(
+            wasLegacy
+                ? "PIN set. Your master password no longer opens this vault."
+                : "PIN changed. Every entry was re-encrypted under the new PIN.",
+            "Done", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    private void ClearChangePinFields()
+    {
+        CurrentSecretBox.Password = string.Empty;
+        NewPinBox.Password = string.Empty;
+        ConfirmPinBox.Password = string.Empty;
+        ChangePinStatusText.Text = string.Empty;
     }
 
     // ===================== Add entry =====================
@@ -230,13 +391,13 @@ public partial class MainWindow : Window
 
     private string? GetSelectedService()
     {
-        var selected = ServiceListBox.SelectedItem as string;
+        var selected = ServiceListBox.SelectedItem as ServiceListItem;
         if (selected == null)
         {
             MessageBox.Show("Select a service from the list first.", "Nothing selected",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
-        return selected;
+        return selected?.Service;
     }
 
     private void ViewButton_Click(object sender, RoutedEventArgs e)
@@ -253,7 +414,8 @@ public partial class MainWindow : Window
         }
 
         MessageBox.Show(
-            $"Service:  {service}\nUsername: {entry.Value.Username}\nPassword: {entry.Value.Password}",
+            $"Service:  {service}\nUsername: {entry.Username}\nPassword: {entry.Password}\n\n" +
+            $"Added:    {TimestampFormat.Format(entry.CreatedUtc)}\nUpdated:  {TimestampFormat.Format(entry.UpdatedUtc)}",
             "Credential", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
@@ -270,7 +432,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        Clipboard.SetText(entry.Value.Password);
+        Clipboard.SetText(entry.Password);
         MessageBox.Show($"Password for '{service}' copied to clipboard.", "Copied",
             MessageBoxButton.OK, MessageBoxImage.Information);
     }

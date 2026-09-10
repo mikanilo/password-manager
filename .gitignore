@@ -3,6 +3,7 @@ obj/
 *.user
 .vs/
 PasswordManager.NativeHost/publish/
+PasswordManager.Gui/publish/
 native-messaging-host-manifest.json
 
 # Never commit an actual vault file if one ends up in the repo folder

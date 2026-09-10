@@ -44,7 +44,9 @@
       margin-top: 6px;
       min-height: 14px;
     }
-    #entries { margin-top: 12px; max-height: 260px; overflow-y: auto; }
+    #status.ok { color: #78C878; }
+    #authLabel { font-size: 12px; color: #bbb; margin-bottom: 6px; }
+    #entries { margin-top: 12px; max-height: 220px; overflow-y: auto; }
     .entry {
       background: #2D2D2D;
       border: 1px solid #444;
@@ -52,9 +54,30 @@
       padding: 8px;
       margin-bottom: 6px;
     }
-    .entry .service { font-weight: 600; margin-bottom: 6px; }
+    .entry .service { font-weight: 600; }
+    .entry .added { color: #888; font-size: 11px; margin: 2px 0 6px 0; }
     .entry .actions { display: flex; gap: 6px; }
     .entry .actions button { flex: 1; font-size: 12px; padding: 5px; }
+
+    .card {
+      background: #262626;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .card h2 { font-size: 13px; margin: 0 0 8px 0; font-weight: 600; }
+    .card .row { display: flex; gap: 6px; }
+    .card .row button { flex: 1; }
+    #detectedHint {
+      background: #2f3d2f;
+      border: 1px solid #4b6b4b;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 12px;
+      color: #cfe8cf;
+      margin-bottom: 8px;
+    }
     #lockRow { margin-top: 10px; }
     #lockRow button { background: #555; }
     .hidden { display: none; }
@@ -65,17 +88,32 @@
     <h1>🔒 pwman</h1>
 
     <div id="authView">
-      <input type="password" id="masterPasswordInput" placeholder="Master password" />
+      <div id="authLabel">Enter your PIN</div>
+      <input type="password" id="pinInput" inputmode="numeric" autocomplete="off"
+             placeholder="PIN" />
       <button id="unlockButton">Unlock</button>
-      <div id="status"></div>
     </div>
 
     <div id="vaultView" class="hidden">
+      <div class="card">
+        <h2>Add an account for this site</h2>
+        <div id="detectedHint" class="hidden"></div>
+        <input type="text" id="newServiceInput" placeholder="Service (e.g. github.com)" />
+        <input type="text" id="newUsernameInput" placeholder="Username or email" />
+        <input type="password" id="newPasswordInput" placeholder="Password" />
+        <div class="row">
+          <button id="generatePasswordButton" class="secondary">Generate</button>
+          <button id="saveAccountButton">Save account</button>
+        </div>
+      </div>
+
       <div id="entries"></div>
       <div id="lockRow">
         <button id="lockButton">Lock</button>
       </div>
     </div>
+
+    <div id="status"></div>
   </div>
 
   <script src="popup.js"></script>

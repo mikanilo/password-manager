@@ -1,4 +1,4 @@
-<Window x:Class="PasswordManager.Gui.MainWindow"
+﻿<Window x:Class="PasswordManager.Gui.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="pwman" Height="520" Width="480"
@@ -47,12 +47,12 @@
         <StackPanel x:Name="AuthPanel" VerticalAlignment="Center">
             <TextBlock Text="pwman" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,0,0,20"/>
 
-            <TextBlock x:Name="AuthModeLabel" Text="Enter your master password" Margin="0,0,0,8"/>
+            <TextBlock x:Name="AuthModeLabel" Text="Enter your PIN" Margin="0,0,0,8"/>
             <PasswordBox x:Name="MasterPasswordBox" KeyDown="MasterPasswordBox_KeyDown"/>
 
             <PasswordBox x:Name="ConfirmPasswordBox" Visibility="Collapsed"
                          PasswordChanged="ConfirmPasswordBox_PasswordChanged"/>
-            <TextBlock x:Name="ConfirmLabel" Text="Confirm master password" Visibility="Collapsed" Margin="0,4,0,0"/>
+            <TextBlock x:Name="ConfirmLabel" Text="Confirm PIN" Visibility="Collapsed" Margin="0,4,0,0"/>
 
             <Button x:Name="AuthActionButton" Content="Unlock" Click="AuthActionButton_Click" Margin="0,16,0,0"/>
 
@@ -83,6 +83,8 @@
                     <Button Content="Copy Password" Click="CopyPasswordButton_Click" Margin="0,4,4,4"/>
                     <Button Content="Delete" Click="DeleteButton_Click" Background="#B04A4A" Margin="4,4,0,4"/>
                 </UniformGrid>
+                <Button x:Name="ChangePinButton" Content="Change PIN" Click="ChangePinButton_Click"
+                        Background="#555555"/>
             </StackPanel>
         </Grid>
 
@@ -109,6 +111,36 @@
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
                     <Button Content="Cancel" Click="CancelAddButton_Click" Background="#555555" Margin="0,0,8,0"/>
                     <Button Content="Save" Click="SaveAddButton_Click"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ===================== CHANGE PIN OVERLAY ===================== -->
+        <Border x:Name="ChangePinOverlay" Background="#1E1E1E" Visibility="Collapsed"
+                BorderBrush="#3A7CA5" BorderThickness="1" CornerRadius="4" Padding="16">
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock x:Name="ChangePinTitle" Text="Change PIN" FontSize="18" FontWeight="Bold"
+                           Margin="0,0,0,8"/>
+                <TextBlock x:Name="ChangePinIntro" FontSize="12" Foreground="#BBBBBB"
+                           TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                <TextBlock x:Name="CurrentSecretLabel" Text="Current PIN"/>
+                <PasswordBox x:Name="CurrentSecretBox"/>
+
+                <TextBlock Text="New PIN (at least 4 digits)"/>
+                <PasswordBox x:Name="NewPinBox"/>
+
+                <TextBlock Text="Confirm new PIN"/>
+                <PasswordBox x:Name="ConfirmPinBox" KeyDown="ConfirmPinBox_KeyDown"/>
+
+                <TextBlock x:Name="ChangePinStatusText" Foreground="#E06666" Margin="0,8,0,0"
+                           TextWrapping="Wrap" FontSize="12"/>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+                    <Button Content="Cancel" Click="CancelChangePinButton_Click"
+                            Background="#555555" Margin="0,0,8,0"/>
+                    <Button x:Name="ConfirmChangePinButton" Content="Change PIN"
+                            Click="SaveChangePinButton_Click"/>
                 </StackPanel>
             </StackPanel>
         </Border>

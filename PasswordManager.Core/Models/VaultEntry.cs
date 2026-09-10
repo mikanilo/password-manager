@@ -14,4 +14,11 @@ public class VaultEntry
     public string CipherTextBase64 { get; set; } = string.Empty;
     public string NonceBase64 { get; set; } = string.Empty;
     public string TagBase64 { get; set; } = string.Empty;
+
+    // When this credential was first saved, and when it was last changed
+    // (a new password, a renamed username). Stored in UTC. Nullable so that
+    // entries written by older versions -- which didn't record these -- load
+    // cleanly and simply show as "unknown" rather than a bogus year-0001 date.
+    public DateTimeOffset? CreatedUtc { get; set; }
+    public DateTimeOffset? UpdatedUtc { get; set; }
 }

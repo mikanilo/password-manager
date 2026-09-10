@@ -36,6 +36,19 @@ public static class CryptoService
     private const int Argon2MemorySizeKb = 65536; // 64 MB
     private const int Argon2DegreeOfParallelism = 2;
 
+    // A PIN carries far less entropy than a passphrase, so its derivation is
+    // deliberately made more expensive than the legacy master-password one.
+    // This is defence in depth rather than the main protection -- the real
+    // barrier is that a PIN alone cannot produce the key at all without the
+    // DPAPI-protected device secret (see DeviceKeyProtector).
+    private const int PinArgon2IterationCount = 6;
+    private const int PinArgon2MemorySizeKb = 131072; // 128 MB
+    private const int PinArgon2DegreeOfParallelism = 2;
+
+    // Domain-separation label for the final HKDF step, so the PIN-derived key
+    // can never collide with a key derived any other way.
+    private static readonly byte[] PinKeyInfo = Encoding.UTF8.GetBytes("pwman-pin-vault-key-v1");
+
     public static byte[] GenerateSalt()
     {
         return RandomNumberGenerator.GetBytes(SaltSizeBytes);
@@ -60,6 +73,58 @@ public static class CryptoService
         };
 
         return argon2.GetBytes(KeySizeBytes);
+    }
+
+    /// <summary>
+    /// Derives the vault encryption key from a PIN, a salt, and the vault's
+    /// device secret.
+    ///
+    /// Two independent inputs are combined here on purpose:
+    ///   - the PIN, which only the user knows, stretched through Argon2id; and
+    ///   - the device secret, which only Windows can hand back to this user
+    ///     account on this machine (DPAPI).
+    ///
+    /// Both are folded together with HKDF-SHA256. Because the device secret is
+    /// a full 32 bytes of randomness, an attacker holding only vault.json has
+    /// no shortcut: guessing the PIN gets them nothing, since the other half
+    /// of the input is not in the file in any recoverable form.
+    /// </summary>
+    public static byte[] DeriveKeyFromPin(string pin, byte[] salt, byte[] deviceSecret)
+    {
+        var pinBytes = Encoding.UTF8.GetBytes(pin);
+
+        using var argon2 = new Argon2id(pinBytes)
+        {
+            Salt = salt,
+            Iterations = PinArgon2IterationCount,
+            MemorySize = PinArgon2MemorySizeKb,
+            DegreeOfParallelism = PinArgon2DegreeOfParallelism,
+        };
+
+        var stretchedPin = argon2.GetBytes(KeySizeBytes);
+
+        try
+        {
+            // HKDF over (stretched PIN || device secret). Concatenating before
+            // the extract step means the output depends on both halves; losing
+            // either one makes the key unrecoverable.
+            var combined = new byte[stretchedPin.Length + deviceSecret.Length];
+            Buffer.BlockCopy(stretchedPin, 0, combined, 0, stretchedPin.Length);
+            Buffer.BlockCopy(deviceSecret, 0, combined, stretchedPin.Length, deviceSecret.Length);
+
+            try
+            {
+                return HKDF.DeriveKey(HashAlgorithmName.SHA256, combined, KeySizeBytes, salt, PinKeyInfo);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(combined);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(stretchedPin);
+        }
     }
 
     /// <summary>

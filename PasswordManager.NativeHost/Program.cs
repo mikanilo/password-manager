@@ -1,5 +1,6 @@
 using System.Text.Json;
 using PasswordManager.Core;
+using PasswordManager.Core.Models;
 
 namespace PasswordManager.NativeHost;
 
@@ -68,7 +69,17 @@ public static class Program
                     return new { success = true, message = "pwman native host is running" };
 
                 case "vaultExists":
-                    return new { success = true, exists = storage.VaultExists() };
+                {
+                    var exists = storage.VaultExists();
+
+                    // The popup labels its input from this, so an un-migrated
+                    // master-password vault still prompts for the right thing.
+                    var authMode = exists
+                        ? storage.GetAuthMode().ToString()
+                        : VaultAuthMode.Pin.ToString();
+
+                    return new { success = true, exists, authMode };
+                }
 
                 case "unlock":
                 {
@@ -81,9 +92,15 @@ public static class Program
                         };
                     }
 
-                    var password = request.GetProperty("password").GetString() ?? string.Empty;
-                    currentKey = storage.Unlock(password);
-                    return new { success = true };
+                    // "pin" is what the popup sends now; "password" is still
+                    // accepted so an older popup build keeps working.
+                    var secret =
+                        (request.TryGetProperty("pin", out var pinProp) ? pinProp.GetString() : null)
+                        ?? (request.TryGetProperty("password", out var pwProp) ? pwProp.GetString() : null)
+                        ?? string.Empty;
+
+                    currentKey = storage.Unlock(secret);
+                    return new { success = true, authMode = storage.GetAuthMode().ToString() };
                 }
 
                 case "list":
@@ -93,8 +110,18 @@ public static class Program
                         return new { success = false, error = "Vault is locked." };
                     }
 
-                    var services = storage.ListServices();
-                    return new { success = true, services };
+                    var entries = storage.ListEntries()
+                        .Select(e => new
+                        {
+                            service = e.Service,
+                            username = e.Username,
+                            createdUtc = e.CreatedUtc?.ToString("o"),
+                            updatedUtc = e.UpdatedUtc?.ToString("o"),
+                        })
+                        .ToList();
+
+                    // "services" kept for backwards compatibility with older popups.
+                    return new { success = true, entries, services = entries.Select(e => e.service).ToList() };
                 }
 
                 case "getPassword":
@@ -112,16 +139,64 @@ public static class Program
                         return new { success = false, error = $"No entry found for '{service}'." };
                     }
 
-                    return new { success = true, username = entry.Value.Username, password = entry.Value.Password };
+                    return new
+                    {
+                        success = true,
+                        username = entry.Username,
+                        password = entry.Password,
+                        createdUtc = entry.CreatedUtc?.ToString("o"),
+                        updatedUtc = entry.UpdatedUtc?.ToString("o"),
+                    };
+                }
+
+                case "addEntry":
+                {
+                    if (currentKey is null)
+                    {
+                        return new { success = false, error = "Vault is locked." };
+                    }
+
+                    var service = request.GetProperty("service").GetString()?.Trim() ?? string.Empty;
+                    var username = request.TryGetProperty("username", out var u) ? u.GetString()?.Trim() ?? string.Empty : string.Empty;
+                    var password = request.GetProperty("password").GetString() ?? string.Empty;
+
+                    if (string.IsNullOrEmpty(service) || string.IsNullOrEmpty(password))
+                    {
+                        return new { success = false, error = "A service name and a password are both required." };
+                    }
+
+                    var existed = storage.ListServices()
+                        .Any(s => string.Equals(s, service, StringComparison.OrdinalIgnoreCase));
+
+                    storage.AddEntry(currentKey, service, username, password);
+
+                    var (strength, feedback) = PasswordGenerator.EvaluateStrength(password);
+                    return new
+                    {
+                        success = true,
+                        replaced = existed,
+                        strength = strength.ToString(),
+                        feedback,
+                    };
+                }
+
+                case "generate":
+                {
+                    var length = request.TryGetProperty("length", out var l) && l.TryGetInt32(out var n) ? n : 20;
+                    return new { success = true, password = PasswordGenerator.Generate(length) };
                 }
 
                 default:
                     return new { success = false, error = $"Unknown action: {action}" };
             }
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            return new { success = false, error = "Incorrect master password." };
+            return new { success = false, error = ex.Message };
+        }
+        catch (DeviceBindingException ex)
+        {
+            return new { success = false, error = ex.Message };
         }
         catch (Exception ex)
         {

@@ -21,14 +21,23 @@ and stays in sync — a fix or improvement in `Core` automatically applies
 everywhere.
 
 ## Features
-- Create a vault protected by a single master password
+- Create a vault unlocked by a short **PIN** (4+ digits), bound to your
+  Windows account so the PIN alone is useless to anyone who copies the file
 - Add, view, list, and delete saved credentials
+- Every credential records when it was **added** and last **updated**; all
+  three frontends show these dates in the same readable form
+  ("Sept 1st 2026, 11:06 am"), and updating a credential keeps its original
+  "added" date
 - Auto-generate strong passwords, or type your own (with a strength check
   and warning before saving anything weak)
 - Copy a password directly to the clipboard without displaying it (GUI, extension)
 - **Browser autofill**: the Chrome extension detects login forms and fills
   them directly from your vault, or copies a password to the clipboard —
   same encrypted vault as the CLI/GUI, no separate storage
+- **Save accounts from the browser**: on a site with no saved entry, the
+  extension pre-fills a new-account form with the current domain and offers
+  to save any username/password you've already typed into the page's login
+  form (or generate a strong one)
 - Same encrypted vault file usable from the CLI, the GUI, or the browser extension
 
 ## Screenshots
@@ -39,15 +48,35 @@ everywhere.
 
 ## Security design
 
-- **Master password → key derivation**: your master password is never stored
-  anywhere. It's run through **Argon2id** (memory-hard KDF, the current
-  OWASP-recommended choice over PBKDF2/bcrypt) along with a random salt to
-  derive a 256-bit encryption key. Each vault has its own random salt.
-- **Password verification without storing the password**: on vault creation,
-  a known fixed string is encrypted with the derived key and stored. On
-  future unlocks, if decrypting that value with the entered password
-  succeeds and matches, the password was correct — the master password
-  itself is never written to disk.
+- **PIN → key derivation, bound to the device**: a PIN on its own is
+  low-entropy — a 4-digit PIN is only 10,000 possibilities, so anyone who
+  copied `vault.json` onto their own machine could brute-force it offline no
+  matter how slow the KDF is. pwman closes that hole by requiring *two*
+  independent inputs to derive the key:
+  1. the **PIN**, stretched with **Argon2id** (memory-hard KDF, the current
+     OWASP-recommended choice over PBKDF2/bcrypt) and a random per-vault salt; and
+  2. a random 32-byte **device secret**, stored in the vault encrypted with
+     **Windows DPAPI** (`DataProtectionScope.CurrentUser`), so only the
+     Windows account that created the vault can recover it.
+
+  Both halves are combined with HKDF-SHA256 to produce the 256-bit AES key.
+  A stolen `vault.json` is therefore not brute-forceable: guessing the PIN
+  gains an attacker nothing, because the other half of the key material is
+  held by the OS and is not in the file in any recoverable form. This is the
+  same idea as a Windows Hello PIN — short, but only meaningful on the
+  device it was set up on.
+
+  The trade-off is deliberate: the vault will **not** open under a different
+  Windows account, on another PC, or after a Windows reinstall. Treat it as
+  device-local storage, not something you can copy between machines.
+- **PIN verification without storing the PIN**: on vault creation, a known
+  fixed string is encrypted with the derived key and stored. On future
+  unlocks, if decrypting that value with the entered PIN succeeds and
+  matches, the PIN was correct — the PIN itself is never written to disk.
+- **Backwards compatible**: vaults created before PIN support record no auth
+  mode, still unlock with their original master password, and can be
+  converted in place with `pwman migrate-to-pin` (which re-encrypts every
+  entry under the new PIN, preserving its added/updated dates).
 - **Entry encryption**: each saved password is encrypted individually with
   **AES-256-GCM**, an authenticated encryption mode that detects tampering
   via an auth tag, unlike plain AES-CBC.
@@ -101,13 +130,21 @@ pwman get gmail                     # retrieve a credential
 pwman list                          # list saved service names
 pwman delete gmail                  # delete a credential
 pwman generate [length]             # print a standalone strong password
+pwman change-pin                    # change the vault PIN
+pwman migrate-to-pin                # convert an old master-password vault to a PIN
 ```
 
 ## GUI usage
 
-Run the app, create or unlock your vault, then use **Add New**, **View**,
+Run the app, create or unlock your vault with your PIN, then use **Add New**, **View**,
 **Copy Password**, and **Delete** on the entries list. **Lock** clears the
 encryption key from memory and returns to the login screen.
+
+**Change PIN** opens a dialog to set a new PIN, re-encrypting every entry
+under it while keeping the saved dates. On a vault that still uses a master
+password the same button reads **Set a PIN** and performs the one-time
+migration (the equivalent of `pwman migrate-to-pin`), after which the master
+password no longer opens the vault.
 
 ## Chrome extension setup
 
@@ -127,13 +164,17 @@ encryption key from memory and returns to the login screen.
    ```powershell
    .\register-native-host.ps1 -ManifestPath "C:\full\path\to\native-messaging-host-manifest.json"
    ```
-5. Click the extension icon, unlock with your master password, and use
-   **Fill on page** or **Copy password** on any saved entry.
+5. Click the extension icon, unlock with your PIN, and use
+   **Fill on page** or **Copy password** on any saved entry — or use the
+   **Add an account for this site** form at the top to save a new one.
 
 ## Project structure
 ```
 PasswordManager.Core/
-├── CryptoService.cs        # Argon2id key derivation + AES-256-GCM encrypt/decrypt
+├── CryptoService.cs        # Argon2id + HKDF key derivation, AES-256-GCM encrypt/decrypt
+├── DeviceKeyProtector.cs   # DPAPI device binding, so a copied vault can't be brute-forced
+├── PinPolicy.cs            # shared PIN rules (4+ digits), enforced by all three frontends
+├── TimestampFormat.cs      # one date format for all frontends ("Sept 1st 2026, 11:06 am")
 ├── PasswordGenerator.cs    # cryptographically secure password generation + strength check
 ├── VaultStorage.cs         # vault.json read/write, higher-level vault operations
 └── Models/
@@ -148,7 +189,7 @@ PasswordManager.Gui/         # WPF GUI
 └── MainWindow.xaml.cs        # event handlers, wired to PasswordManager.Core
 
 PasswordManager.NativeHost/  # Native messaging host
-├── Program.cs                 # message dispatch: unlock/list/getPassword
+├── Program.cs                 # message dispatch: unlock/list/getPassword/addEntry/generate
 └── NativeMessaging.cs         # Chrome's native messaging wire protocol
 
 chrome-extension/            # Chrome extension (Manifest V3)
@@ -164,5 +205,9 @@ chrome-extension/            # Chrome extension (Manifest V3)
 - [x] Shared Core library refactor
 - [x] WPF desktop GUI
 - [x] Chrome extension + native messaging host
+- [x] Per-credential added / updated timestamps
+- [x] Create credentials directly from the Chrome extension
+- [x] PIN unlock with Windows DPAPI device binding (replaces the master password)
+- [x] Change / set the PIN from the desktop GUI
 - [ ] Clipboard auto-clear after a timeout (currently persists until overwritten)
 - [ ] Have I Been Pwned–style breach check for saved service names

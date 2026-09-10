@@ -1,4 +1,5 @@
 using PasswordManager.Core;
+using PasswordManager.Core.Models;
 
 var vaultPath = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -54,6 +55,14 @@ try
             HandleDelete(args[1]);
             break;
 
+        case "change-pin":
+            HandleChangePin();
+            break;
+
+        case "migrate-to-pin":
+            HandleMigrateToPin();
+            break;
+
         case "generate":
             var length = args.Length >= 2 && int.TryParse(args[1], out var parsedLength)
                 ? parsedLength
@@ -87,35 +96,117 @@ void HandleInit()
         return;
     }
 
-    Console.WriteLine("Creating a new vault. Choose a strong master password --");
-    Console.WriteLine("this is the ONE password you'll need to remember. There is");
-    Console.WriteLine("no recovery if you forget it, since it's never stored anywhere.");
+    Console.WriteLine("Creating a new vault. Choose a PIN -- at least 4 digits.");
+    Console.WriteLine();
+    Console.WriteLine("Your PIN alone is not enough to open this vault: it is combined");
+    Console.WriteLine("with a secret that Windows releases only to your user account on");
+    Console.WriteLine("this machine. That means a copied vault.json cannot be attacked");
+    Console.WriteLine("offline -- but it also means the vault will NOT open under a");
+    Console.WriteLine("different Windows account, on another PC, or after a Windows");
+    Console.WriteLine("reinstall. There is no recovery if you forget the PIN.");
     Console.WriteLine();
 
-    var password = ReadPasswordMasked("Master password: ");
-    var confirm = ReadPasswordMasked("Confirm master password: ");
+    var pin = ReadPasswordMasked("New PIN: ");
+    var confirm = ReadPasswordMasked("Confirm PIN: ");
 
-    if (password != confirm)
+    if (pin != confirm)
     {
-        Console.WriteLine("Passwords didn't match. Try again.");
+        Console.WriteLine("PINs didn't match. Try again.");
         return;
     }
 
-    if (password.Length < 8)
+    var validationError = PinPolicy.Validate(pin);
+    if (validationError is not null)
     {
-        Console.WriteLine("Master password should be at least 8 characters. Try again.");
+        Console.WriteLine($"{validationError} Try again.");
         return;
     }
 
-    storage.Initialize(password);
+    storage.InitializeWithPin(pin);
     Console.WriteLine($"Vault created at {vaultPath}");
+}
+
+void HandleChangePin()
+{
+    RequireVaultExists();
+
+    if (storage.GetAuthMode() != VaultAuthMode.Pin)
+    {
+        Console.WriteLine("This vault still uses a master password. Run 'pwman migrate-to-pin' first.");
+        return;
+    }
+
+    var currentPin = ReadPasswordMasked("Current PIN: ");
+    var newPin = ReadPasswordMasked("New PIN: ");
+    var confirm = ReadPasswordMasked("Confirm new PIN: ");
+
+    if (newPin != confirm)
+    {
+        Console.WriteLine("PINs didn't match. Nothing changed.");
+        return;
+    }
+
+    var validationError = PinPolicy.Validate(newPin);
+    if (validationError is not null)
+    {
+        Console.WriteLine($"{validationError} Nothing changed.");
+        return;
+    }
+
+    storage.ChangePin(currentPin, newPin);
+    Console.WriteLine("PIN changed. Every entry was re-encrypted under the new PIN.");
+}
+
+void HandleMigrateToPin()
+{
+    RequireVaultExists();
+
+    if (storage.GetAuthMode() == VaultAuthMode.Pin)
+    {
+        Console.WriteLine("This vault already uses a PIN. Use 'pwman change-pin' to change it.");
+        return;
+    }
+
+    Console.WriteLine("Converting this vault from a master password to a PIN.");
+    Console.WriteLine("After this, the master password will no longer open it.");
+    Console.WriteLine();
+
+    var masterPassword = ReadPasswordMasked("Current master password: ");
+    var newPin = ReadPasswordMasked("New PIN: ");
+    var confirm = ReadPasswordMasked("Confirm new PIN: ");
+
+    if (newPin != confirm)
+    {
+        Console.WriteLine("PINs didn't match. Nothing changed.");
+        return;
+    }
+
+    var validationError = PinPolicy.Validate(newPin);
+    if (validationError is not null)
+    {
+        Console.WriteLine($"{validationError} Nothing changed.");
+        return;
+    }
+
+    storage.MigrateToPin(masterPassword, newPin);
+    Console.WriteLine("Vault migrated to PIN unlock. Every entry was re-encrypted.");
+}
+
+/// <summary>
+/// Prompts for whichever secret this vault actually uses and returns the
+/// derived key. Vaults created before PIN support still expect a master
+/// password, so the prompt has to follow the file rather than assume.
+/// </summary>
+byte[] UnlockInteractive()
+{
+    var prompt = storage.GetAuthMode() == VaultAuthMode.Pin ? "PIN: " : "Master password: ";
+    return storage.Unlock(ReadPasswordMasked(prompt));
 }
 
 void HandleAdd(string service, string username)
 {
     RequireVaultExists();
-    var masterPassword = ReadPasswordMasked("Master password: ");
-    var key = storage.Unlock(masterPassword);
+    var key = UnlockInteractive();
 
     Console.Write($"Generate a strong password for {service}? (y/n): ");
     var choice = Console.ReadLine()?.Trim().ToLowerInvariant();
@@ -165,8 +256,7 @@ void HandleGenerate(int length)
 void HandleGet(string service)
 {
     RequireVaultExists();
-    var masterPassword = ReadPasswordMasked("Master password: ");
-    var key = storage.Unlock(masterPassword);
+    var key = UnlockInteractive();
 
     var result = storage.GetEntry(key, service);
     if (result is null)
@@ -176,25 +266,28 @@ void HandleGet(string service)
     }
 
     Console.WriteLine($"Service:  {service}");
-    Console.WriteLine($"Username: {result.Value.Username}");
-    Console.WriteLine($"Password: {result.Value.Password}");
+    Console.WriteLine($"Username: {result.Username}");
+    Console.WriteLine($"Password: {result.Password}");
+    Console.WriteLine($"Added:    {TimestampFormat.Format(result.CreatedUtc)}");
+    Console.WriteLine($"Updated:  {TimestampFormat.Format(result.UpdatedUtc)}");
 }
 
 void HandleList()
 {
     RequireVaultExists();
-    var services = storage.ListServices();
+    var entries = storage.ListEntries();
 
-    if (services.Count == 0)
+    if (entries.Count == 0)
     {
         Console.WriteLine("No entries saved yet.");
         return;
     }
 
     Console.WriteLine("Saved services:");
-    foreach (var service in services)
+    var width = entries.Max(e => e.Service.Length);
+    foreach (var entry in entries)
     {
-        Console.WriteLine($"  - {service}");
+        Console.WriteLine($"  - {entry.Service.PadRight(width)}   added {TimestampFormat.Format(entry.CreatedUtc)}");
     }
 }
 
@@ -220,12 +313,14 @@ void PrintUsage()
     Console.WriteLine("pwman - a local encrypted password manager");
     Console.WriteLine();
     Console.WriteLine("Usage:");
-    Console.WriteLine("  pwman init                        Create a new vault");
+    Console.WriteLine("  pwman init                        Create a new vault (PIN protected)");
     Console.WriteLine("  pwman add <service> <username>     Add or update an entry (prompts for password)");
     Console.WriteLine("  pwman get <service>                 Retrieve an entry");
     Console.WriteLine("  pwman list                          List all saved service names");
     Console.WriteLine("  pwman delete <service>              Delete an entry");
     Console.WriteLine("  pwman generate [length]              Print a strong random password (default 20 chars)");
+    Console.WriteLine("  pwman change-pin                    Change the vault PIN");
+    Console.WriteLine("  pwman migrate-to-pin                Convert an old master-password vault to a PIN");
 }
 
 /// <summary>
